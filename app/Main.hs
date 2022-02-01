@@ -1,3 +1,4 @@
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -16,8 +17,9 @@
 
 module Main where
 
-import Control.Monad.Logger
 import Yesod
+import Control.Monad.IO.Class  (liftIO)
+import Control.Monad.Logger    (runStderrLoggingT)
 import Data.Text
 import Data.Aeson
 import GHC.Generics
@@ -41,9 +43,18 @@ mkYesod "HelloWorld" [parseRoutes|
 /page1 Page1R GET
 /page2 Page2R GET
 /search SearchR POST
+/piano PianoR POST
 |]
 
 instance Yesod HelloWorld where
+
+instance YesodPersist HelloWorld where
+  type YesodPersistBackend HelloWorld = SqlBackend
+  runDB :: SqlPersistT Handler a -> Handler a
+  runDB action = do
+    master <- getYesod
+    runSqlPool action $ postgres master
+
 
 getHomeR :: Handler Html
 getHomeR = defaultLayout $ do
@@ -55,7 +66,7 @@ getHomeR = defaultLayout $ do
      Searching...
 <input class="form-control" type="search"
        name="search" placeholder="Begin Typing To Search Users..."
-       hx-post="/search"
+       hx-post=@{SearchR}
        hx-trigger="keyup changed delay:500ms, search"
        hx-target="#search-results"
        hx-indicator=".htmx-indicator">
@@ -67,19 +78,34 @@ getHomeR = defaultLayout $ do
       <th>Last Name
       <th>Email
     <tbody id="search-results">
+
+<form hx-post="@{PianoR}">
+  <input class="form-control" type="text"
+       name="make-piano" placeholder="Make a piano">
+  <button class="btn btn-default">Submit
+
 !|]
 
 postSearchR :: Handler Html
 postSearchR = getPostParams >>= \case
   [("search", search)] -> pure [shamlet|<tr><td>#{search}|]
 
+postPianoR :: Handler Html
+postPianoR = getPostParams >>= \case
+  [("make-piano", piano)] ->
+    do
+      entryId <- runDB . insert $ Piano (unpack piano) (Just 10)
+      pure [shamlet|<tr><td>#{(show entryId)}|]
+
 getPage1R = defaultLayout [whamlet|<p> You are currently on page 1
                                    <a href=@{Page2R}>Go to page 2!|]
 getPage2R = defaultLayout [whamlet|<a href=@{HomeR}>Go home!|]
-
 
 main :: IO ()
 main = runStderrLoggingT $ withPostgresqlPool connStr 10 $ \pool -> liftIO $ do
     flip runSqlPersistMPool pool $ do
         runMigration migrateAll
-        liftIO $ warp 3000 (HelloWorld pool)
+        pianoId <- insert $ Piano "piano1" (Just 1)
+        onePianoPost <- selectList [PianoId ==. pianoId] [LimitTo 1]
+        liftIO $ print onePianoPost
+    liftIO $ warp 3000 (HelloWorld pool) -- this must be here
